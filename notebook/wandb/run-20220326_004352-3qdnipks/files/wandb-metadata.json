@@ -1,0 +1,28 @@
+{
+    "os": "Linux-5.4.0-105-generic-x86_64-with-glibc2.29",
+    "python": "3.8.10",
+    "heartbeatAt": "2022-03-25T15:43:57.864139",
+    "startedAt": "2022-03-25T15:43:52.193626",
+    "docker": null,
+    "gpu": "NVIDIA RTX A5000",
+    "gpu_count": 1,
+    "cpu_count": 28,
+    "cuda": null,
+    "args": [
+        "--ip=127.0.0.1",
+        "--stdin=9003",
+        "--control=9001",
+        "--hb=9000",
+        "--Session.signature_scheme=\"hmac-sha256\"",
+        "--Session.key=b\"bae0f944-f21a-4530-a1fe-b26352f51403\"",
+        "--shell=9002",
+        "--transport=\"tcp\"",
+        "--iopub=9004",
+        "--f=/tmp/tmp-11201MKXxacJKS1GA.json"
+    ],
+    "state": "running",
+    "program": "<python with no main file>",
+    "host": "DL-BoxII",
+    "username": "kota",
+    "executable": "/bin/python3"
+}

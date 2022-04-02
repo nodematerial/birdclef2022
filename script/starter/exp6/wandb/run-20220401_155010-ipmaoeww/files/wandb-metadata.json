@@ -1,0 +1,18 @@
+{
+    "os": "Linux-5.4.0-107-generic-x86_64-with-glibc2.29",
+    "python": "3.8.10",
+    "heartbeatAt": "2022-04-01T06:50:11.929094",
+    "startedAt": "2022-04-01T06:50:10.885094",
+    "docker": null,
+    "gpu": "NVIDIA RTX A5000",
+    "gpu_count": 1,
+    "cpu_count": 28,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "train.py",
+    "codePath": "train.py",
+    "host": "DL-BoxII",
+    "username": "kota",
+    "executable": "/usr/bin/python3"
+}
