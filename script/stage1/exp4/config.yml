@@ -1,6 +1,6 @@
 DEBUG : False
 seed : 42
-epochs : 15
+epochs : 45
 train : True
 folds : [0]
 img_size : 224
@@ -61,12 +61,12 @@ scored_birds :  {
 
 loader_params : {
     "train": {
-        "batch_size": 16,
+        "batch_size": 32,
         "num_workers": 2,
         "shuffle": True
     },
     "valid": {
-        "batch_size": 64,
+        "batch_size": 32,
         "num_workers": 4,
         "shuffle": False
     }
@@ -79,7 +79,7 @@ split_params : {
     "random_state": 1213
 }
 
-base_model_name : "tf_efficientnet_b4_ns"
+base_model_name : "resnest50d"
 pooling : "max"
 pretrained : True
 num_classes : 152

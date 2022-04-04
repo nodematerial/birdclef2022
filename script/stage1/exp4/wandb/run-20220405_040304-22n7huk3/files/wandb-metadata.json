@@ -1,8 +1,8 @@
 {
     "os": "Linux-5.4.0-107-generic-x86_64-with-glibc2.29",
     "python": "3.8.10",
-    "heartbeatAt": "2022-04-02T11:05:24.996932",
-    "startedAt": "2022-04-02T11:05:24.005314",
+    "heartbeatAt": "2022-04-04T19:03:05.357313",
+    "startedAt": "2022-04-04T19:03:04.313819",
     "docker": null,
     "gpu": "NVIDIA RTX A5000",
     "gpu_count": 1,
@@ -11,10 +11,10 @@
     "args": [],
     "state": "running",
     "program": "train.py",
-    "codePath": "script/stage1/exp3/train.py",
+    "codePath": "script/stage1/exp4/train.py",
     "git": {
         "remote": "git@github.com:nodematerial/birdclef2022.git",
-        "commit": "08459878831a6b3ce7df9f41efc6da68bff0d651"
+        "commit": "fe2620a57781fb8ef03001261780c1c53b4654b1"
     },
     "email": "kouta.tus1@gmail.com",
     "root": "/home/kota/kaggle/birdclef-2022",
