@@ -555,8 +555,7 @@ def training(logger):
                     loss.backward()
                     optimizer.step()
                     optimizer.zero_grad()
-
-            sum_loss +=loss.item()
+                    sum_loss +=loss.item()
             scheduler.step()
             train_loss = sum_loss / len(loaders['train'])
 

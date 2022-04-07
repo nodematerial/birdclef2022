@@ -1,6 +1,6 @@
-DEBUG : True
+DEBUG : False
 seed : 42
-epochs : 55
+epochs : 30
 train : True
 folds : [0]
 img_size : 224
@@ -16,8 +16,8 @@ project_name : "birdclef2022_using_SAM"
 second_label : True
 
 transforms : {
-    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}, {"name": "RandomVolume"}],
-    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}, {"name": "RandomVolume"}],
+    "train": [{"name": "Normalize"}],
+    "valid": [{"name": "Normalize"}],
 }
 period : 20
 n_mels : 128
@@ -64,12 +64,12 @@ scored_birds :  {
 # Dataloader_parameters
 loader_params : {
     "train": {
-        "batch_size": 16,
+        "batch_size": 32,
         "num_workers": 4,
         "shuffle": True
     },
     "valid": {
-        "batch_size": 16,
+        "batch_size": 32,
         "num_workers": 4,
         "shuffle": False
     }
@@ -104,5 +104,5 @@ optimizer_params : {
 # scheduler
 scheduler_name : "CosineAnnealingLR"
 scheduler_params : {
-    "T_max": 7
+    "T_max": 30
 }

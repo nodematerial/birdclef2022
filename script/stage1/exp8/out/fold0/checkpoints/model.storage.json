@@ -6,8 +6,8 @@
   "minimize": false,
   "storage": [
     {
-      "logpath": "out/fold0/checkpoints/model.0019.pth",
-      "metric": 0.3988676817005459
+      "logpath": "out/fold0/checkpoints/model.0060.pth",
+      "metric": 0.7259115990430464
     }
   ]
 }

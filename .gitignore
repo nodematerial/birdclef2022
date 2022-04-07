@@ -149,3 +149,6 @@ cython_debug/
 *.ogg
 # datadir
 input/
+
+# wandb
+wandb/
