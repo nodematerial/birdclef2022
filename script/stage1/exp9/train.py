@@ -22,10 +22,8 @@ import torch.utils.data as torchdata
 
 from pathlib import Path
 from typing import List
-from tqdm import tqdm
 
 from customaugment import *
-from sam import SAM
 from albumentations.pytorch import ToTensorV2
 from albumentations.core.transforms_interface import ImageOnlyTransform
 from catalyst.core import Callback, CallbackOrder, IRunner
@@ -40,14 +38,13 @@ from torchlibrosa.stft import LogmelFilterBank, Spectrogram
 from torchlibrosa.augmentation import SpecAugmentation
 
 import wandb
-#!wandb login your_wandb_apikey
+#!wandb login e469a7142648533cd9120fae5762d44e9a86d12f
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ['WANDB_SILENT'] = 'true'
 
 with open('config.yml', 'r') as yml:
     CFG = yaml.load(yml, Loader=yaml.SafeLoader)
-
 
 if CFG['DEBUG']:
     CFG['epochs'] = 3
@@ -142,7 +139,10 @@ class WaveformDataset(torchdata.Dataset):
             for code in second_codes:
                 labels[CFG['target_columns'].index(code)] = 1.0
 
-        return  y, labels
+        return {
+            "image": y,
+            "targets": labels
+        }
 
 
 def get_transforms(phase: str):
@@ -213,7 +213,53 @@ def init_weights(model):
         model.bias.data.zero_()
 
 
+def do_mixup(x: torch.Tensor, mixup_lambda: torch.Tensor):
+    """Mixup x of even indexes (0, 2, 4, ...) with x of odd indexes
+    (1, 3, 5, ...).
+    Args:
+      x: (batch_size * 2, ...)
+      mixup_lambda: (batch_size * 2,)
+    Returns:
+      out: (batch_size, ...)
+    """
+    out = (x[0::2].transpose(0, -1) * mixup_lambda[0::2] +
+           x[1::2].transpose(0, -1) * mixup_lambda[1::2]).transpose(0, -1)
+    return out
+
+
+class Mixup(object):
+    def __init__(self, mixup_alpha, random_seed=1234):
+        """Mixup coefficient generator.
+        """
+        self.mixup_alpha = mixup_alpha
+        self.random_state = np.random.RandomState(random_seed)
+
+    def get_lambda(self, batch_size):
+        """Get mixup random coefficients.
+        Args:
+          batch_size: int
+        Returns:
+          mixup_lambdas: (batch_size,)
+        """
+        mixup_lambdas = []
+        for n in range(0, batch_size, 2):
+            lam = self.random_state.beta(
+                self.mixup_alpha, self.mixup_alpha, 1)[0]
+            mixup_lambdas.append(lam)
+            mixup_lambdas.append(1. - lam)
+
+        return torch.from_numpy(np.array(mixup_lambdas, dtype=np.float32))
+
+
 def interpolate(x: torch.Tensor, ratio: int):
+    """Interpolate data in time domain. This is used to compensate the
+    resolution reduction in downsampling of a CNN.
+    Args:
+      x: (batch_size, time_steps, classes_num)
+      ratio: int, ratio to interpolate
+    Returns:
+      upsampled: (batch_size, time_steps * ratio, classes_num)
+    """
     (batch_size, time_steps, classes_num) = x.shape
     upsampled = x[:, :, None, :].repeat(1, 1, ratio, 1)
     upsampled = upsampled.reshape(batch_size, time_steps * ratio, classes_num)
@@ -221,6 +267,14 @@ def interpolate(x: torch.Tensor, ratio: int):
 
 
 def pad_framewise_output(framewise_output: torch.Tensor, frames_num: int):
+    """Pad framewise_output to the same length as input frames. The pad value
+    is the same as the value of the last frame.
+    Args:
+      framewise_output: (batch_size, frames_num, classes_num)
+      frames_num: int, number of frames to pad
+    Outputs:
+      output: (batch_size, frames_num, classes_num)
+    """
     output = F.interpolate(
         framewise_output.unsqueeze(1),
         size=(frames_num, framewise_output.size(2)),
@@ -385,6 +439,7 @@ class TimmSED(nn.Module):
         return output_dict
 
 
+# https://www.kaggle.com/c/rfcx-species-audio-detection/discussion/213075
 class BCEFocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0):
         super().__init__()
@@ -468,7 +523,129 @@ def get_scheduler(optimizer):
             optimizer, **CFG['scheduler_params'])
 
 
-def display(logger):
+class SampleF1Callback(Callback):
+    def __init__(self,
+                 input_key: str = "targets",
+                 output_key: str = "logits",
+                 prefix: str = "f1",
+                 threshold=0.5):
+        super().__init__(CallbackOrder.Metric)
+
+        self.input_key = input_key
+        self.output_key = output_key
+        self.prefix = prefix
+        self.threshold = threshold
+
+    def on_loader_start(self, state: IRunner):
+        self.prediction: List[np.ndarray] = []
+        self.target: List[np.ndarray] = []
+
+    def on_batch_end(self, state: IRunner):
+        targ = state.batch[self.input_key].detach().cpu().numpy()
+        out = state.batch[self.output_key]
+
+        clipwise_output = out["clipwise_output"].detach().cpu().numpy()
+
+        self.prediction.append(clipwise_output)
+        self.target.append(targ)
+
+        y_pred = clipwise_output > self.threshold
+        score = metrics.f1_score(targ, y_pred, average="samples")
+
+        state.batch_metrics[self.prefix] = score
+
+    def on_loader_end(self, state: IRunner):
+        y_pred = np.concatenate(self.prediction, axis=0) > self.threshold
+        y_true = np.concatenate(self.target, axis=0)
+        score = metrics.f1_score(y_true, y_pred, average="samples")
+
+        state.loader_metrics[self.prefix] = score
+        if state.is_valid_loader:
+            state.epoch_metrics[state._valid_loader + "_epoch_" +
+                                self.prefix] = score
+        else:
+            state.epoch_metrics["train_epoch_" + self.prefix] = score
+
+
+class mAPCallback(Callback):
+    def __init__(self,
+                 input_key: str = "targets",
+                 output_key: str = "logits",
+                 model_output_key: str = "clipwise_output",
+                 prefix: str = "mAP"):
+        super().__init__(CallbackOrder.Metric)
+        self.input_key = input_key
+        self.output_key = output_key
+        self.model_output_key = model_output_key
+        self.prefix = prefix
+
+    def on_loader_start(self, state: IRunner):
+        self.prediction: List[np.ndarray] = []
+        self.target: List[np.ndarray] = []
+
+    def on_batch_end(self, state: IRunner):
+        targ = state.batch[self.input_key].detach().cpu().numpy()
+        out = state.batch[self.output_key]
+
+        clipwise_output = out[self.model_output_key].detach().cpu().numpy()
+
+        self.prediction.append(clipwise_output)
+        self.target.append(targ)
+
+        try:
+            score = metrics.average_precision_score(
+                targ, clipwise_output, average=None)
+        except ValueError:
+            import pdb
+            pdb.set_trace()
+        score = np.nan_to_num(score).mean()
+        state.batch_metrics[self.prefix] = score
+
+    def on_loader_end(self, state: IRunner):
+        y_pred = np.concatenate(self.prediction, axis=0)
+        y_true = np.concatenate(self.target, axis=0)
+        score = metrics.average_precision_score(y_true, y_pred, average=None)
+        score = np.nan_to_num(score).mean()
+        state.loader_metrics[self.prefix] = score
+        if state.is_valid_loader:
+            state.epoch_metrics[state._valid_loader + "_epoch_" +
+                                self.prefix] = score
+        else:
+            state.epoch_metrics["train_epoch_" + self.prefix] = score
+
+
+def get_callbacks():
+    return [
+        SampleF1Callback(prefix="f1_at_008", threshold=0.08), 
+        SampleF1Callback(prefix="f1_at_01", threshold=0.1), 
+        SampleF1Callback(prefix="f1_at_02", threshold=0.2),
+        SampleF1Callback(prefix="f1_at_03", threshold=0.3),
+        mAPCallback()
+    ]
+
+
+def get_runner(device: torch.device):
+    return SupervisedRunner(input_key="image", target_key="targets")#, loss_key='loss')
+
+
+
+def main():
+    warnings.filterwarnings("ignore")
+
+    logdir = Path("out")
+    logdir.mkdir(exist_ok=True, parents=True)
+    if (logdir / "train.log").exists():
+        os.remove(logdir / "train.log")
+    logger = init_logger(log_file=logdir / "train.log")
+    subdir= os.path.basename(os.getcwd())
+
+    set_seed(CFG['seed'])
+    device = get_device()
+
+    splitter = getattr(model_selection, CFG['split'])(**CFG['split_params'])
+
+    train = pd.read_csv(CFG['train_csv'])
+    train.secondary_labels = train.secondary_labels.apply(eval)
     logger.info("=" * 60)
     logger.info('model config')
     logger.info('- model_name : {}'.format(CFG['base_model_name']))
@@ -483,30 +660,16 @@ def display(logger):
     logger.info(f'- train_augmentations :{train_augments}')
     logger.info(f'- valid_augmentations :{valid_augments}')
     logger.info("=" * 60)
-
-def f1_score(y, clipwise_output, threshold = 0.2):
-    pred = clipwise_output > threshold
-    return metrics.f1_score(y, pred, average="samples")
-
-
-def training(logger):
-    exp_num= os.path.basename(os.getcwd())
-    device = get_device()
-    train = pd.read_csv(CFG['train_csv'])
-    train.secondary_labels = train.secondary_labels.apply(eval)
-    splitter = getattr(model_selection, CFG['split'])(**CFG['split_params'])
-    for fold, (trn_idx, val_idx) in enumerate(splitter.split(train, y=train["primary_label"])):
-        if fold not in CFG['folds']:
+    # main loop
+    for i, (trn_idx, val_idx) in enumerate(splitter.split(train, y=train["primary_label"])):
+        if i not in CFG['folds']:
             continue
         
-        logger.info(f"***** Fold {fold} Training *****")
-
-        wandbrun = wandb.init(project = CFG['project_name'], 
-                         name = exp_num, reinit=True)
+        logger.info(f"***** Fold {i} Training *****")
 
         if CFG['DEBUG']:
-            trn_df = train.loc[trn_idx, :][0:100].reset_index(drop=True)
-            val_df = train.loc[val_idx, :][0:100].reset_index(drop=True)
+            trn_df = train.loc[trn_idx, :][0:1000].reset_index(drop=True)
+            val_df = train.loc[val_idx, :][0:1000].reset_index(drop=True)
         else:
             trn_df = train.loc[trn_idx, :].reset_index(drop=True)
             val_df = train.loc[val_idx, :].reset_index(drop=True)
@@ -524,100 +687,35 @@ def training(logger):
                 **CFG['loader_params'][phase])  # type: ignore
             for phase, df_ in zip(["train", "valid"], [trn_df, val_df])
         }
-
         model = TimmSED(
             base_model_name=CFG['base_model_name'],
             pretrained=CFG['pretrained'],
             num_classes=CFG['num_classes'],
             in_channels=CFG['in_channels'])
-
         criterion = get_criterion()
         optimizer = get_optimizer(model)
         scheduler = get_scheduler(optimizer)
-        best_f1 = 0
-
-        for epoch in range(CFG['epochs']):
-            # training
-            sum_loss =0
-            model.train()
-            for x, y in tqdm(loaders['train']):
-                if CFG['optimizer_name'] == 'SAM':
-                    # first forward-backward pass
-                    # use this loss for any training statistics
-                    loss = criterion(model(x), y)
-                    loss.backward()
-                    optimizer.first_step(zero_grad=True)
-                    # second forward-backward pass
-                    criterion(model(x), y).backward()
-                    optimizer.second_step(zero_grad=True)
-                    sum_loss += loss.item()
-                else: 
-                    loss = criterion(model(x), y)
-                    loss.backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    sum_loss += loss.item()
-            scheduler.step()
-            train_loss = sum_loss / len(loaders['train'])
-
-            # validation
-            sum_loss = 0
-            sum_f1s = [0] * len(CFG['thresholds'])
-            thresholds = CFG['thresholds']
-            main_thresh_id = CFG['main_thresh_id']
-            model.eval()
-            for x, y in tqdm(loaders['valid']):
-                with torch.no_grad():
-                    logits = model(x)
-                    loss = criterion(logits, y)
-                    sum_loss+=loss.item()
-                    for i, threshold in enumerate(thresholds):
-                        sum_f1s[i] += f1_score(y, logits['clipwise_output'],
-                                               threshold = threshold)
-
-            valid_loss = sum_loss / len(loaders['valid'])
-            f1s = [ k / len(loaders['valid']) for k in sum_f1s]
-
-            if f1s[main_thresh_id] > best_f1:
-                best_f1 = f1s[main_thresh_id]
-                best_epoch = epoch
-                torch.save(model.state_dict(), f'out/fold{fold}/best.pth')
-            logdict = {'train/loss' : train_loss, 'valid/loss' : valid_loss, 'lr':scheduler.get_last_lr()[0]}
-            f1_dict = {}
-            for i, threshold in enumerate(thresholds):
-                logdict[f'f1_at_{threshold}'] = f1s[i]
-                f1_dict[f'f1_at_{threshold}'] = round(f1s[i], 4)
-
-            logger.info(f'train_loss:{train_loss:.4g} | valid_loss:{loss:.4g} | f1_score : {f1_dict}')
-            wandb.log(logdict)
-
-        logger.info(f'fold{fold}\'s best_score is {best_f1:.4g} at epoch {best_epoch}')
+        callbacks = get_callbacks()
+        wandblogger = WandbLogger(project = CFG['project_name'], name = subdir)
+        runner = get_runner(device)
+        runner.train(
+            model=model,
+            criterion=criterion,
+            loaders=loaders,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            num_epochs=CFG['epochs'],
+            verbose=True,
+            logdir=logdir / f"fold{i}",
+            valid_loader="valid",
+            loggers = {"wandb": wandblogger},
+            callbacks=callbacks,
+            valid_metric=CFG['main_metric'],
+            minimize_valid_metric=CFG['minimize_metric'])
 
         del model, optimizer, scheduler
         gc.collect()
         torch.cuda.empty_cache()
-
-        wandbrun.finish()
-
-
-def main():
-    warnings.filterwarnings("ignore")
-    logdir = Path(CFG['logdir'])
-    logdir.mkdir(exist_ok=True, parents=True)
-    for fold in CFG['folds']:
-            foldpath = logdir / f'fold{fold}'
-            foldpath.mkdir(exist_ok=True, parents=True)
-    if (logdir / "train.log").exists():
-        os.remove(logdir / "train.log")
-    set_seed(CFG['seed'])
-    logger = init_logger(log_file=logdir / "train.log")
-
-    # display
-    display(logger)
-
-    # main_loop
-    training(logger)
-
 
 if __name__== '__main__':
     main()
