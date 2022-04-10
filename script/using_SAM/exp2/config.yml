@@ -14,8 +14,8 @@ project_name : "birdclef2022_using_SAM"
 second_label : True
 
 transforms : {
-    "train": [{"name": "Normalize"}],
-    "valid": [{"name": "Normalize"}],
+    "train": [{"name": "Normalize"}, {"name": "GaussianNoise"}, {"name": "PitchShift"}],
+    "valid": [{"name": "Normalize"}, {"name": "GaussianNoise"}],
 }
 period : 20
 n_mels : 128
