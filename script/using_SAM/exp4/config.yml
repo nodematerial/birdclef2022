@@ -1,15 +1,16 @@
 DEBUG : False
 seed : 42
-epochs : 60
+epochs : 30
 train : True
 folds : [0]
 img_size : 224
-main_metric : "f1_at_02"
-minimize_metric : False
 train_datadir : "../../../input/birdclef-2022/train_audio"
 train_csv : "../../../input/birdclef-2022/train_metadata.csv"
+logdir : "out"
+thresholds : [0.1, 0.2, 0.3]
+main_thresh_id : 1
 
-project_name : "birdclef2022_stage1"
+project_name : "birdclef2022_using_SAM"
 second_label : True
 
 transforms : {
@@ -58,19 +59,21 @@ scored_birds :  {
     "puaioh" : 17, "skylar" : 18, "warwhe1" : 19, "yefcan" : 20
     }
 
+# Dataloader_parameters
 loader_params : {
     "train": {
-        "batch_size": 16,
-        "num_workers": 4,
+        "batch_size": 32,
+        "num_workers": 20,
         "shuffle": True
     },
     "valid": {
         "batch_size": 32,
-        "num_workers": 4,
+        "num_workers": 20,
         "shuffle": False
     }
 }
 
+# split_way
 split : "StratifiedKFold"
 split_params : {
     "n_splits": 5,
@@ -78,33 +81,26 @@ split_params : {
     "random_state": 1213
 }
 
-base_model_name : "resnext50_32x4d"
+# model
+base_model_name : "convnext_tiny"
 pooling : "max"
 pretrained : True
 num_classes : 152
 in_channels : 1
 
+# loss
 loss_name : "BCEFocal2WayLoss"
-
 loss_params: {}
 
-optimizer_name : "Adam"
+# optimizer
+optimizer_name : "SAM"
 base_optimizer : "Adam"
 optimizer_params : {
-    "lr": 0.0006
+    "lr": 0.0008, 
 }
 
-base_optimizer : "Adam"
+# scheduler
 scheduler_name : "CosineAnnealingLR"
 scheduler_params : {
-    "T_max": 9
+    "T_max": 30
 }
-
-
-# SAM
-#optimizer_name : "SAM"
-#base_optimizer : "Adam"
-#optimizer_params : {
-#    "lr": 0.0008, 
-#    "momentum"=0.9
-#}

@@ -1,25 +1,12 @@
-DEBUG : False
-seed : 42
-epochs : 45
-train : True
-folds : [0]
-img_size : 224
-main_metric : "f1_at_05"
-minimize_metric : False
-train_datadir : "../../../input/birdclef-2022/train_audio"
-test_datadir : ../../input/birdclef-2022/train_audio/akepa1
-train_csv : "../../../input/birdclef-2022/train_metadata.csv"
+
+test_datadir : ../../input/birdclef-2022/train_audio
 model_path : model.best.pth
 
-project_name : "birdclef2022"
-second_label : True
 
 transforms : {
-    "train": [{"name": "Normalize"}],
-    "valid": [{"name": "Normalize"}],
     "test": [{"name": "Normalize"}]
 }
-threshold : 0.1
+threshold : 0.2
 period : 20
 n_mels : 128
 fmin : 20
@@ -77,44 +64,9 @@ spodov : 137, sposan : 138, towsol : 139, wantat1 : 140, warwhe1 : 141, wesmea :
 whfibi : 145, whiter : 146, whttro : 147, wiltur : 148, yebcar : 149, yefcan : 150, zebdov : 151 }
 
 
-loader_params : {
-    "train": {
-        "batch_size": 64,
-        "num_workers": 4,
-        "shuffle": True
-    },
-    "valid": {
-        "batch_size": 64,
-        "num_workers": 4,
-        "shuffle": False
-    }
-}
-
-split : "StratifiedKFold"
-split_params : {
-    "n_splits": 5,
-    "shuffle": True,
-    "random_state": 1213
-}
 
 base_model_name : "tf_efficientnet_b0_ns"
 pooling : "max"
 pretrained : True
 num_classes : 152
 in_channels : 1
-
-loss_name : "BCEFocal2WayLoss"
-
-loss_params: {}
-
-optimizer_name : "Adam"
-base_optimizer : "Adam"
-optimizer_params : {
-    "lr": 0.0008
-}
-
-base_optimizer : "Adam"
-scheduler_name : "CosineAnnealingLR"
-scheduler_params : {
-    "T_max": 10
-}

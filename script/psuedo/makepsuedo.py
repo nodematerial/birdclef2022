@@ -245,19 +245,6 @@ class TestDataset(torchdata.Dataset):
         row_id = sample.row_id
 
         y = self.clip.astype(np.float32)
-
-        len_y = len(y)
-        effective_length = CFG["sample_rate"] * CFG["period"]
-        start = 0
-        if len_y < effective_length:
-            new_y = np.zeros(effective_length, dtype=y.dtype)
-            new_y[start:start + len_y] = y
-            y = new_y.astype(np.float32)
-        elif len_y > effective_length:
-            y = y[start:start + effective_length].astype(np.float32)
-        else:
-            y = y.astype(np.float32)
-
         y = np.nan_to_num(y)
 
         return y, row_id
@@ -527,10 +514,7 @@ def drop_stripes(image: np.ndarray, dim: int, drop_width: int, stripes_num: int)
     return image
 
 def prepare_model_for_inference(model, path: Path):
-    if not torch.cuda.is_available():
-        ckpt = torch.load(path, map_location="cpu")
-    else:
-        ckpt = torch.load(path)
+    ckpt = torch.load(path, map_location="cpu")
     model.load_state_dict(ckpt)
     model.eval()
     return model
@@ -544,8 +528,8 @@ def prediction_for_clip(test_df: pd.DataFrame,
     dataset = TestDataset(df=test_df, 
                           clip=clip,
                           waveform_transforms=get_transforms(phase="test"))
-    loader = torchdata.DataLoader(dataset, batch_size=32, shuffle=False)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    loader = torchdata.DataLoader(dataset, batch_size=1, shuffle=False)
+    device = torch.device("cuda")
     
     model.eval()
     prediction_dict = {}
@@ -585,12 +569,10 @@ def prediction(test_audios, weights_path: Path, threshold):
 
     warnings.filterwarnings("ignore")
     prediction_dfs = []
-    for audio_path in test_audios:
+    for audio_path in tqdm(test_audios):
         clip, _ = sf.read(audio_path)
         if len(clip.shape) == 2:
             clip = (clip[:,0] + clip[:,1]) / 2
-        if len(clip) > 32000 * 3:
-            clip = clip[32000 * 3:]
 
         row_ids = []
         row_id = "_".join(re.split("[_.]", audio_path.name)[:2]) 
@@ -609,9 +591,9 @@ def prediction(test_audios, weights_path: Path, threshold):
     prediction_df = pd.concat(prediction_dfs, axis=0, sort=False).reset_index(drop=True)
     return prediction_df
 
-all_audios = list(Path(CFG['test_datadir']).glob("*.ogg"))
+all_audios = list(Path(CFG['test_datadir']).rglob("*.ogg"))
 weights_path = Path(CFG['model_path'])
 submission = prediction(test_audios=all_audios,
                         weights_path=weights_path,
                         threshold=CFG["threshold"])
-submission.to_csv("submission.csv", index=False)
+submission.to_csv("psuedo_{}.csv".format(CFG['threshold']), index=False)
