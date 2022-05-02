@@ -7,10 +7,10 @@ img_size : 224
 train_datadir : "../../../input/birdclef-2022/train_audio"
 train_csv : "../../../input/birdclef-2022/train_metadata.csv"
 logdir : "out"
-thresholds : [0.1, 0.15, 0.2]
+thresholds : [0.15, 0.2, 0.25]
 main_thresh_id : 1
 
-project_name : "birdclef2022_double_attention"
+project_name : "birdclef2022_using_SAM"
 second_label : True
 
 transforms : {
@@ -28,7 +28,7 @@ mix_p : 0.2
 mix_alpha : 0.4
 melspectrogram_parameters : {
     "n_mels": 224,
-    "fmin": 20,
+    "fmin": 2000,
     "fmax": 16000
 }
 
@@ -57,19 +57,19 @@ target_columns : [
 scored_birds :  {
     "akiapo" : 0, "aniani" : 1, "apapan" : 2, "barpet" : 3, "crehon" : 4,
     "elepai" : 5, "ercfra" : 6, "hawama" : 7, "hawcre": 8, "hawgoo" : 9, "hawhaw" : 10, 
-    "hawpet1" : 11, "houfin" : 12, "iiwi" : 13, "jabwar" : 14,"maupar" : 15, "omao" : 16,
+    "hawpet1" : 11, "houfin" : 12, "iiwi" :13, "jabwar" : 14,"maupar" : 15, "omao" : 16,
     "puaioh" : 17, "skylar" : 18, "warwhe1" : 19, "yefcan" : 20
     }
 
 # Dataloader_parameters
 loader_params : {
     "train": {
-        "batch_size": 32,
+        "batch_size": 64,
         "num_workers": 24,
         "shuffle": True
     },
     "valid": {
-        "batch_size": 32,
+        "batch_size": 64,
         "num_workers": 24,
         "shuffle": False
     }
@@ -80,7 +80,7 @@ split : "StratifiedKFold"
 split_params : {
     "n_splits": 5,
     "shuffle": True,
-    "random_state": 1213
+    "random_state": 42
 }
 
 # model
@@ -96,7 +96,7 @@ loss_name : "BCEFocal2WayWeightedLoss"
 loss_params: {score_weight: 1}
 
 # optimizer
-optimizer_name : "SAM"
+optimizer_name : "Adam"
 base_optimizer : "Adam"
 optimizer_params : {
     "lr": 0.001, 
@@ -107,3 +107,4 @@ scheduler_name : "CosineAnnealingLR"
 scheduler_params : {
     "T_max": 45
 }
+

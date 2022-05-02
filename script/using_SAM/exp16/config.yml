@@ -1,6 +1,6 @@
 DEBUG : False
 seed : 42
-epochs : 45
+epochs : 30
 train : True
 folds : [0]
 img_size : 224
@@ -17,18 +17,18 @@ transforms : {
     "train": [{"name": "Normalize"}, {"name": "GaussianNoise"}, {"name": "RandomVolume"}],
     "valid": [{"name": "Normalize"}, {"name": "GaussianNoise"}, {"name": "RandomVolume"}],
 }
-period : 30
+period : 20
 n_mels : 128
 fmin : 20
 fmax : 16000
 n_fft : 2048
 hop_length : 512
 sample_rate : 32000
-mix_p : 0.5
-mix_alpha : 0.9
+mix_p : 0
+mix_alpha : 0.5
 melspectrogram_parameters : {
-    "n_mels": 224,
-    "fmin": 20,
+    "n_mels": 128,
+    "fmin": 2000,
     "fmax": 16000
 }
 
@@ -96,7 +96,7 @@ loss_name : "BCEFocal2WayWeightedLoss"
 loss_params: {score_weight: 1}
 
 # optimizer
-optimizer_name : "SAM"
+optimizer_name : "Adam"
 base_optimizer : "Adam"
 optimizer_params : {
     "lr": 0.001, 
@@ -105,5 +105,5 @@ optimizer_params : {
 # scheduler
 scheduler_name : "CosineAnnealingLR"
 scheduler_params : {
-    "T_max": 45
+    "T_max": 30
 }

@@ -231,77 +231,21 @@ def pad_framewise_output(framewise_output: torch.Tensor, frames_num: int):
     return output
 
 
-def gem(x: torch.Tensor, p=3, eps=1e-6):
-    return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1. / p)
-
-
 class GeM(nn.Module):
     def __init__(self, p=3, eps=1e-6):
-        super().__init__()
-        self.p = nn.Parameter(torch.ones(1) * p)
+        super(GeM, self).__init__()
+        self.p = nn.Parameter(torch.ones(1)*p)
         self.eps = eps
 
     def forward(self, x):
-        return gem(x, p=self.p, eps=self.eps)
-
-    def __repr__(self):
-        return self.__class__.__name__ + f"(p={self.p.data.tolist()[0]:.4f}, eps={self.eps})"
-
-
-class AttBlockV2(nn.Module):
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 activation="linear"):
-        super().__init__()
-
-        self.activation = activation
-        self.att = nn.Conv1d(
-            in_channels=in_features,
-            out_channels=out_features,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=True)
-        self.cla = nn.Conv1d(
-            in_channels=in_features,
-            out_channels=out_features,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=True)
-
-        self.init_weights()
-
-    def init_weights(self):
-        init_layer(self.att)
-        init_layer(self.cla)
-
-    def forward(self, x):
-        # x: (n_samples, n_in, n_time)
-        norm_att = torch.softmax(torch.tanh(self.att(x)), dim=-1)
-        cla = self.nonlinear_transform(self.cla(x))
-        x = torch.sum(norm_att * cla, dim=2)
-        return x, norm_att, cla
-
-    def nonlinear_transform(self, x):
-        if self.activation == 'linear':
-            return x
-        elif self.activation == 'sigmoid':
-            return torch.sigmoid(x)
-
-def padding_shape(in_feature, out_size):
-    in_size = in_feature.size()[-1]
-    reps= out_size // in_size + 1
-    si = list(in_feature.size())
-    si[-1] *= reps
-    out_feature = in_feature.transpose(1,2).repeat(1, 1, reps).reshape(si)
-    out_feature = torch.narrow(out_feature, 2, 0, out_size)
-    return out_feature
+        return self.gem(x, p=self.p, eps=self.eps)
+        
+    def gem(self, x, p=3, eps=1e-6):
+        return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1./p)
 
 
-class DoubleAttention(nn.Module):
-    def __init__(self, base_model_name: str, pretrained=True, num_classes=152, in_channels=1):
+class Simple(nn.Module):
+    def __init__(self, base_model_name: str, pretrained=False, num_classes=152, in_channels=1):
         super().__init__()
         # Spectrogram extractor
         self.spectrogram_extractor = Spectrogram(n_fft=CFG['n_fft'], hop_length=CFG['hop_length'],
@@ -328,20 +272,9 @@ class DoubleAttention(nn.Module):
             in_features = base_model.fc.in_features
         else:
             in_features = base_model.classifier.in_features
-
-        self.fc1 = nn.Linear(in_features, in_features, bias=True)
-        self.fc2 = nn.Linear(in_features, in_features, bias=True)
-        self.att_block = AttBlockV2(
-            in_features, num_classes, activation="sigmoid")
-
-        self.first_att = nn.Conv1d(
-            in_channels=in_features,
-            out_channels=1,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=True)
-
+        self.fc1 = nn.Linear(in_features, num_classes, bias=True)
+        self.fff = nn.Linear(1025, 224, bias=True)
+        self.gem = GeM()
         self.init_weight()
 
     def init_weight(self):
@@ -351,86 +284,28 @@ class DoubleAttention(nn.Module):
     def forward(self, input):
         # (batch_size, 1, time_steps, freq_bins)
         #x = self.spectrogram_extractor(input)
-        x = self.logmel_extractor(input)    # (batch_size, 1, time_steps, mel_bins)
-
-        frames_num = x.shape[2]
+        
+        aaa = self.fff(input)
+        logmel = self.logmel_extractor(input)    # (batch_size, 1, time_steps, mel_bins)
+        x = torch.cat((aaa, logmel), 1)
 
         x = x.transpose(1, 3)
         x = self.bn0(x)
-        Spectrogram = x.transpose(1, 3)
+        x = x.transpose(1, 3)
 
         if self.training:
-            Spectrogram = self.spec_augmenter(Spectrogram)
+            x = self.spec_augmenter(x)
 
-        x = Spectrogram.transpose(2, 3)
+        x = x.transpose(2, 3)
         # (batch_size, channels, freq, frames)
-
         x = self.encoder(x)
-        out_size = Spectrogram.size()[2]
 
-        # (batch_size, channels, frames)
-        x = torch.mean(x, dim=2)
-
-        # channel smoothing
-        x1 = F.max_pool1d(x, kernel_size=3, stride=1, padding=1)
-        x2 = F.avg_pool1d(x, kernel_size=3, stride=1, padding=1)
-        x = x1 + x2
-
+        # (batch_size, channels)
+        x = torch.squeeze(self.gem(x))
         x = F.dropout(x, p=0.5, training=self.training)
-        x = x.transpose(1, 2)
-        x = F.relu_(self.fc2(x))
-        x = x.transpose(1, 2)
-        x = F.dropout(x, p=0.5, training=self.training)
+        logit = self.fc1(x)
 
-        first_att = torch.softmax(torch.tanh(self.first_att(x)), dim=-1)
-        first_att = padding_shape(first_att, out_size)
-        first_att = torch.unsqueeze(first_att, 2)
-
-        # Second step
-        Spectrogram.transpose_(2, 3)
-        Spectrogram = torch.mul(Spectrogram, first_att)
-
-        # (batch_size, channels, freq, frames)
-        x = self.encoder(Spectrogram)
-
-        # (batch_size, channels, frames)
-        x = torch.mean(x, dim=2)
-
-        # channel smoothing
-        x1 = F.max_pool1d(x, kernel_size=3, stride=1, padding=1)
-        x2 = F.avg_pool1d(x, kernel_size=3, stride=1, padding=1)
-        x = x1 + x2
-
-        x = F.dropout(x, p=0.5, training=self.training)
-        x = x.transpose(1, 2)
-        x = F.relu_(self.fc1(x))
-        x = x.transpose(1, 2)
-        x = F.dropout(x, p=0.5, training=self.training)
-
-        (clipwise_output, norm_att, segmentwise_output) = self.att_block(x)
-        logit = torch.sum(norm_att * self.att_block.cla(x), dim=2)
-        segmentwise_logit = self.att_block.cla(x).transpose(1, 2)
-        segmentwise_output = segmentwise_output.transpose(1, 2)
-
-        interpolate_ratio = frames_num // segmentwise_output.size(1)
-
-        # Get framewise output
-        framewise_output = interpolate(segmentwise_output,
-                                       interpolate_ratio)
-        framewise_output = pad_framewise_output(framewise_output, frames_num)
-
-        framewise_logit = interpolate(segmentwise_logit, interpolate_ratio)
-        framewise_logit = pad_framewise_output(framewise_logit, frames_num)
-
-        output_dict = {
-            "framewise_output": framewise_output,
-            "segmentwise_output": segmentwise_output,
-            "logit": logit, # logit of clipwise_output
-            "framewise_logit": framewise_logit,# logit of framewise_output
-            "clipwise_output": clipwise_output
-        }
-
-        return output_dict
+        return logit
 
 
 class BCEFocalLoss(nn.Module):
@@ -441,6 +316,7 @@ class BCEFocalLoss(nn.Module):
         self.weights = weights
 
     def forward(self, preds, targets):
+        preds = preds
         if self.weights == 'None':
             bce_loss = nn.BCEWithLogitsLoss(reduction='none')(preds, targets)
         else:
@@ -452,28 +328,7 @@ class BCEFocalLoss(nn.Module):
         loss = loss.mean()
         return loss
 
-
-class BCEFocal2WayLoss(nn.Module):
-    def __init__(self, weights=[1, 1], class_weights=None):
-        super().__init__()
-
-        self.focal = BCEFocalLoss()
-
-        self.weights = weights
-
-    def forward(self, input, target):
-        input_ = input["logit"]
-        target = target.float()
-
-        framewise_output = input["framewise_logit"]
-        clipwise_output_with_max, _ = framewise_output.max(dim=1)
-
-        loss = self.focal(input_, target)
-        aux_loss = self.focal(clipwise_output_with_max, target)
-
-        return self.weights[0] * loss + self.weights[1] * aux_loss
-
-class BCEFocal2WayWeightedLoss(nn.Module):
+class BCEFocalWeightedLoss(nn.Module):
     def __init__(self, W=[1, 1], device = 'cuda', score_weight = 1):
         super().__init__()
 
@@ -486,26 +341,18 @@ class BCEFocal2WayWeightedLoss(nn.Module):
         self.weights = [x * CFG['num_classes'] / sum(self.weights) for x in self.weights]
         self.weights = torch.tensor(self.weights).to(device)
         self.focal = BCEFocalLoss(weights = self.weights)
-        self.W = W
 
     def forward(self, input, target):
-        input_ = input["logit"]
         target = target.float()
+        loss = self.focal(input, target)
 
-        framewise_output = input["framewise_logit"]
-        clipwise_output_with_max, _ = framewise_output.max(dim=1)
-
-        loss = self.focal(input_, target)
-        aux_loss = self.focal(clipwise_output_with_max, target)
-
-        return self.W[0] * loss + self.W[1] * aux_loss
+        return loss
 
 
 
 __CRITERIONS__ = {
     "BCEFocalLoss": BCEFocalLoss,
-    "BCEFocal2WayLoss": BCEFocal2WayLoss,
-    "BCEFocal2WayWeightedLoss":BCEFocal2WayWeightedLoss
+    "BCEFocal2WeightedLoss":BCEFocalWeightedLoss
 }
 
 
@@ -607,7 +454,11 @@ def training(logger, fold):
             for phase, df_ in zip(["train", "valid"], [trn_df, val_df])
         }
 
-        model = DoubleAttention(base_model_name=CFG['base_model_name']).to(device)
+        model = Simple(
+            base_model_name=CFG['base_model_name'],
+            pretrained=CFG['pretrained'],
+            num_classes=CFG['num_classes'],
+            in_channels=CFG['in_channels']).to(device)
 
         criterion = get_criterion()
         optimizer = get_optimizer(model)
@@ -659,11 +510,11 @@ def training(logger, fold):
                 with torch.no_grad():
                     x, y = x.to(device), y.to(device)
                     x = model.spectrogram_extractor(x)
-                    logits = model(x)
-                    loss = criterion(logits, y)
+                    logit = model(x)
+                    loss = criterion(logit, y)
                     sum_loss+=loss.item()
                     for i, threshold in enumerate(thresholds):
-                        sum_f1s[i] += f1_score(y.to('cpu'), logits['clipwise_output'].to('cpu'),
+                        sum_f1s[i] += f1_score(y.to('cpu'), logit.sigmoid().to('cpu'),
                                                threshold = threshold)
 
             valid_loss = sum_loss / len(loaders['valid'])

@@ -290,18 +290,9 @@ class AttBlockV2(nn.Module):
         elif self.activation == 'sigmoid':
             return torch.sigmoid(x)
 
-def padding_shape(in_feature, out_size):
-    in_size = in_feature.size()[-1]
-    reps= out_size // in_size + 1
-    si = list(in_feature.size())
-    si[-1] *= reps
-    out_feature = in_feature.transpose(1,2).repeat(1, 1, reps).reshape(si)
-    out_feature = torch.narrow(out_feature, 2, 0, out_size)
-    return out_feature
 
-
-class DoubleAttention(nn.Module):
-    def __init__(self, base_model_name: str, pretrained=True, num_classes=152, in_channels=1):
+class TimmSED(nn.Module):
+    def __init__(self, base_model_name: str, pretrained=False, num_classes=24, in_channels=1):
         super().__init__()
         # Spectrogram extractor
         self.spectrogram_extractor = Spectrogram(n_fft=CFG['n_fft'], hop_length=CFG['hop_length'],
@@ -328,19 +319,9 @@ class DoubleAttention(nn.Module):
             in_features = base_model.fc.in_features
         else:
             in_features = base_model.classifier.in_features
-
         self.fc1 = nn.Linear(in_features, in_features, bias=True)
-        self.fc2 = nn.Linear(in_features, in_features, bias=True)
         self.att_block = AttBlockV2(
             in_features, num_classes, activation="sigmoid")
-
-        self.first_att = nn.Conv1d(
-            in_channels=in_features,
-            out_channels=1,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=True)
 
         self.init_weight()
 
@@ -357,41 +338,14 @@ class DoubleAttention(nn.Module):
 
         x = x.transpose(1, 3)
         x = self.bn0(x)
-        Spectrogram = x.transpose(1, 3)
+        x = x.transpose(1, 3)
 
         if self.training:
-            Spectrogram = self.spec_augmenter(Spectrogram)
+            x = self.spec_augmenter(x)
 
-        x = Spectrogram.transpose(2, 3)
+        x = x.transpose(2, 3)
         # (batch_size, channels, freq, frames)
-
         x = self.encoder(x)
-        out_size = Spectrogram.size()[2]
-
-        # (batch_size, channels, frames)
-        x = torch.mean(x, dim=2)
-
-        # channel smoothing
-        x1 = F.max_pool1d(x, kernel_size=3, stride=1, padding=1)
-        x2 = F.avg_pool1d(x, kernel_size=3, stride=1, padding=1)
-        x = x1 + x2
-
-        x = F.dropout(x, p=0.5, training=self.training)
-        x = x.transpose(1, 2)
-        x = F.relu_(self.fc2(x))
-        x = x.transpose(1, 2)
-        x = F.dropout(x, p=0.5, training=self.training)
-
-        first_att = torch.softmax(torch.tanh(self.first_att(x)), dim=-1)
-        first_att = padding_shape(first_att, out_size)
-        first_att = torch.unsqueeze(first_att, 2)
-
-        # Second step
-        Spectrogram.transpose_(2, 3)
-        Spectrogram = torch.mul(Spectrogram, first_att)
-
-        # (batch_size, channels, freq, frames)
-        x = self.encoder(Spectrogram)
 
         # (batch_size, channels, frames)
         x = torch.mean(x, dim=2)
@@ -406,7 +360,6 @@ class DoubleAttention(nn.Module):
         x = F.relu_(self.fc1(x))
         x = x.transpose(1, 2)
         x = F.dropout(x, p=0.5, training=self.training)
-
         (clipwise_output, norm_att, segmentwise_output) = self.att_block(x)
         logit = torch.sum(norm_att * self.att_block.cla(x), dim=2)
         segmentwise_logit = self.att_block.cla(x).transpose(1, 2)
@@ -607,7 +560,11 @@ def training(logger, fold):
             for phase, df_ in zip(["train", "valid"], [trn_df, val_df])
         }
 
-        model = DoubleAttention(base_model_name=CFG['base_model_name']).to(device)
+        model = TimmSED(
+            base_model_name=CFG['base_model_name'],
+            pretrained=CFG['pretrained'],
+            num_classes=CFG['num_classes'],
+            in_channels=CFG['in_channels']).to(device)
 
         criterion = get_criterion()
         optimizer = get_optimizer(model)
