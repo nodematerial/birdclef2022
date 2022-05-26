@@ -1,6 +1,6 @@
-# Birdclef Experiment Repository
+# Birdclef Experiment Repository & 50th Place Solution
 
-このリポジトリはKaggle BirdCLEF 2022 Competition の実験用リポジトリです。
+このリポジトリはKaggle BirdCLEF 2022 Competition の実験用リポジトリかつ、50位の解法です。
 
 ## 結果
 Rank: Public 44th →　Private 50 th (Silver medal)  
