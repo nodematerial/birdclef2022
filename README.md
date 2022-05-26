@@ -42,8 +42,9 @@ scored_birds内部での出現率の違いなどには対応できていない�
 
 ## 解法
 
-### Single Model
 ![Solution](solution.png) 
+
+### Single Model
 図に示す通りです。鳴き声のデータを20secondで区切りメルスペクトログラムへと変換し、
 Augmentation(Normalize, Pink Noise)を加えたものを入力とし、ResNet101dで特徴量
 抽出を行いました(出力はbatch size ×　channel × frequency × time の四次元)。
@@ -66,5 +67,5 @@ Backbone として複雑なモデルを使用する(Swin Transformerなど)
 PaSST(https://github.com/kkoutini/PaSST)の使用  
 得られた特徴量にMulti head attentionを無理やり適用する  
 Arcface による深層距離学習(深層距離学習を使用できる問題設定ではないことに途中で気づく)  
-Sound Event Triage Loss(https://arxiv.org/pdf/2204.06402.pdf)を使用する
+Sound Event Triage Loss(https://arxiv.org/pdf/2204.06402.pdf )を使用する  
 Psuedo label を用いる
