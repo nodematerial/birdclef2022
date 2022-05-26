@@ -1,6 +1,6 @@
 DEBUG : False 
 seed : 42
-epochs : 30
+epochs : 35
 train : True
 folds : [0]
 img_size : 224
@@ -17,23 +17,18 @@ second_label : True
 psuedo_label : False
 
 transforms : {
-    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}],
-    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}],
+    "train": [],
+    "valid": [],
 }
 period : 20
 n_mels : 128
-fmin : 2000
+fmin : 20
 fmax : 16000
 n_fft : 2048
 hop_length : 512
 sample_rate : 32000
-mix_p : 0.2
-mix_alpha : 0.5
-melspectrogram_parameters : {
-    "n_mels": 224,
-    "fmin": 20,
-    "fmax": 16000
-}
+mix_p : 0.5
+mix_alpha : 0.8
 
 target_columns : [
     "afrsil1","akekee","akepa1","akiapo","akikik","amewig","aniani","apapan",
@@ -83,11 +78,11 @@ split : "StratifiedKFold"
 split_params : {
     "n_splits": 5,
     "shuffle": True,
-    "random_state": 42
+    "random_state": 1
 }
 
 # model
-base_model_name : "resnet101d"
+base_model_name : "resnext50d_32x4d"
 pooling : "max"
 pretrained : True
 load_weight : False 
@@ -102,11 +97,11 @@ loss_params: {}
 optimizer_name : "SAM"
 base_optimizer : "Adam"
 optimizer_params : {
-    "lr": 0.001, 
+    "lr": 0.0008, 
 }
 
 # scheduler
 scheduler_name : "CosineAnnealingLR"
 scheduler_params : {
-    "T_max": 32
+    "T_max": 37
 }

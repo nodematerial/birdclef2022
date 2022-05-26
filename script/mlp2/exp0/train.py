@@ -287,8 +287,9 @@ class Simple(nn.Module):
             in_features = base_model.fc.in_features
         else:
             in_features = base_model.classifier.in_features
-        self.fc1 = nn.Linear(in_features, num_classes, bias=True)
-        self.gem = GeM()
+        self.fc1 = nn.Linear(in_features + 32, num_classes, bias=True)
+        self.gem1 = GeM()
+        self.gem2 = GeM()
         self.init_weight()
 
     def init_weight(self):
@@ -312,7 +313,9 @@ class Simple(nn.Module):
         x = self.encoder(x)
 
         # (batch_size, channels)
-        x = torch.squeeze(self.gem(x))
+        x1 = torch.squeeze(torch.squeeze(self.gem1(x), 2) ,2)
+        x2 = torch.squeeze(torch.squeeze(self.gem2(x.transpose(1,2)), 2) ,2)
+        x = torch.cat((x1, x2), 1)
         x = F.dropout(x, p=0.5, training=self.training)
         logit = self.fc1(x)
 

@@ -51,7 +51,7 @@ with open('config.yml', 'r') as yml:
 
 
 if CFG['DEBUG']:
-    CFG['epochs'] = 1
+    CFG['epochs'] = 3
 
 
 def set_seed(seed=42):
@@ -429,128 +429,77 @@ def f1_score(y, clipwise_output, threshold = 0.2):
     return metrics.f1_score(y, pred, average="samples")
 
 
-def training(logger):
+def training(logger, fold):
     exp_num= os.path.basename(os.getcwd())
     device = get_device()
     train = pd.read_csv(CFG['train_csv'])
     train.secondary_labels = train.secondary_labels.apply(eval)
     splitter = getattr(model_selection, CFG['split'])(**CFG['split_params'])
-    for fold, (trn_idx, val_idx) in enumerate(splitter.split(train, y=train["primary_label"])):
-        if fold not in CFG['folds']:
-            continue
-        
-        logger.info(f"***** Fold {fold} Training *****")
+    wandbrun = wandb.init(project = CFG['project_name'], 
+                        name = exp_num, reinit=True)
 
-        wandbrun = wandb.init(project = CFG['project_name'], 
-                         name = f'{exp_num}_fold{fold}', reinit=True)
+    if CFG['DEBUG']:
+        train = train[0:100].reset_index(drop=True)
 
-        if CFG['DEBUG']:
-            trn_df = train.loc[trn_idx, :][0:100].reset_index(drop=True)
-            val_df = train.loc[val_idx, :][0:100].reset_index(drop=True)
-        else:
-            trn_df = train.loc[trn_idx, :].reset_index(drop=True)
-            val_df = train.loc[val_idx, :].reset_index(drop=True)
+    loader = torchdata.DataLoader(
+            WaveformDataset(
+                train,
+                CFG['train_datadir'],
+                img_size=CFG['img_size'],
+                waveform_transforms=get_transforms('train'),
+                period=CFG['period'],
+                validation=False
+            ),
+            **CFG['loader_params']['train'])
 
-        loaders = {
-            phase: torchdata.DataLoader(
-                WaveformDataset(
-                    df_,
-                    CFG['train_datadir'],
-                    img_size=CFG['img_size'],
-                    waveform_transforms=get_transforms(phase),
-                    period=CFG['period'],
-                    validation=(phase == "valid")
-                ),
-                **CFG['loader_params'][phase])  # type: ignore
-            for phase, df_ in zip(["train", "valid"], [trn_df, val_df])
-        }
+    model = Simple(
+        base_model_name=CFG['base_model_name'],
+        pretrained=CFG['pretrained'],
+        num_classes=CFG['num_classes'],
+        in_channels=CFG['in_channels']).to(device)
 
-        model = Simple(
-            base_model_name=CFG['base_model_name'],
-            pretrained=CFG['pretrained'],
-            num_classes=CFG['num_classes'],
-            in_channels=CFG['in_channels']).to(device)
+    criterion = get_criterion()
+    optimizer = get_optimizer(model)
+    scheduler = get_scheduler(optimizer)
+    mixupper = Mixup(p=CFG['mix_p'], alpha=CFG['mix_alpha'])
+    best_loss = 9999999
+    
+    for epoch in range(CFG['epochs']):
+        # training
+        sum_loss =0
+        model.train()
+        print(epoch)
+        for x, y in tqdm(loader):
+            mixupper.init_lambda()
+            x, y = x.to(device), y.to(device)
+            x = model.spectrogram_extractor(x)
+            x = mixupper.lam * x + (1 - mixupper.lam) * x.flip(0)
+            y = mixupper.lam * y + (1 - mixupper.lam) * y.flip(0)
+            # first forward-backward pass
+            # use this loss for any training statistics
+            logits = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.first_step(zero_grad=True)
+            # second forward-backward pass
+            criterion(model(x), y).backward()
+            optimizer.second_step(zero_grad=True)
+            sum_loss += loss.item()
 
-        criterion = get_criterion()
-        optimizer = get_optimizer(model)
-        scheduler = get_scheduler(optimizer)
-        scaler = GradScaler()
-        mixupper = Mixup(p=CFG['mix_p'], alpha=CFG['mix_alpha'])
-        best_f1 = 0
-        
-        if CFG['load_weight']:
-            weight = torch.load(CFG['logdir'] + f'/fold{fold}/best.pth')
-            model.load_state_dict(weight)
+        scheduler.step()
+        train_loss = sum_loss / len(loader)
 
-        for epoch in range(CFG['epochs']):
-            # training
-            sum_loss =0
-            model.train()
-            for x, y in tqdm(loaders['train']):
-                mixupper.init_lambda()
-                x, y = x.to(device), y.to(device)
-                x = model.spectrogram_extractor(x)
-                x = mixupper.lam * x + (1 - mixupper.lam) * x.flip(0)
-                y = mixupper.lam * y + (1 - mixupper.lam) * y.flip(0)
-                if CFG['optimizer_name'] == 'SAM':
-                    # first forward-backward pass
-                    # use this loss for any training statistics
-                    loss = criterion(model(x), y)
-                    loss.backward()
-                    optimizer.first_step(zero_grad=True)
-                    # second forward-backward pass
-                    criterion(model(x), y).backward()
-                    optimizer.second_step(zero_grad=True)
-                    sum_loss += loss.item()
-                else: 
-                    loss = criterion(model(x), y)
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                    sum_loss += loss.item()
-            scheduler.step()
-            train_loss = sum_loss / len(loaders['train'])
+        if train_loss < best_loss:
+            torch.save(model.state_dict(), f'out/fold{fold}/best.pth')
+        logdict = {'train/loss' : train_loss, 'lr':scheduler.get_last_lr()[0]}
 
-            # validation
-            sum_loss = 0
-            sum_f1s = [0] * len(CFG['thresholds'])
-            thresholds = CFG['thresholds']
-            main_thresh_id = CFG['main_thresh_id']
-            model.eval()
-            for x, y in tqdm(loaders['valid']):
-                with torch.no_grad():
-                    x, y = x.to(device), y.to(device)
-                    x = model.spectrogram_extractor(x)
-                    logit = model(x)
-                    loss = criterion(logit, y)
-                    sum_loss+=loss.item()
-                    for i, threshold in enumerate(thresholds):
-                        sum_f1s[i] += f1_score(y.to('cpu'), logit.sigmoid().to('cpu'),
-                                               threshold = threshold)
+        logger.info(f'train_loss:{train_loss:.4g}')
+        wandb.log(logdict)
 
-            valid_loss = sum_loss / len(loaders['valid'])
-            f1s = [ k / len(loaders['valid']) for k in sum_f1s]
-
-            if f1s[main_thresh_id] > best_f1:
-                best_f1 = f1s[main_thresh_id]
-                best_epoch = epoch
-                torch.save(model.state_dict(), f'out/fold{fold}/best.pth')
-            logdict = {'train/loss' : train_loss, 'valid/loss' : valid_loss, 'lr':scheduler.get_last_lr()[0]}
-            f1_dict = {}
-            for i, threshold in enumerate(thresholds):
-                logdict[f'f1_at_{threshold}'] = f1s[i]
-                f1_dict[f'f1_at_{threshold}'] = round(f1s[i], 4)
-
-            logger.info(f'train_loss:{train_loss:.4g} | valid_loss:{loss:.4g} | f1_score : {f1_dict}')
-            wandb.log(logdict)
-
-        logger.info(f'fold{fold}\'s best_score is {best_f1:.4g} at epoch {best_epoch}')
-
-        del model, optimizer, scheduler
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        wandbrun.finish()
+    del model, optimizer, scheduler
+    gc.collect()
+    torch.cuda.empty_cache()
+    wandbrun.finish()
 
 
 def main():
@@ -568,8 +517,7 @@ def main():
     for fold in CFG['folds']:
         foldpath = logdir / f'fold{fold}'
         foldpath.mkdir(exist_ok=True, parents=True)
-        
-    training(logger)
+        training(logger, fold)
 
 
 if __name__== '__main__':

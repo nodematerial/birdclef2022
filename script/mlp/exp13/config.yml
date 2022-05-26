@@ -17,23 +17,18 @@ second_label : True
 psuedo_label : False
 
 transforms : {
-    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}],
-    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}],
+    "train": [],
+    "valid": [],
 }
 period : 20
 n_mels : 128
-fmin : 2000
+fmin : 20
 fmax : 16000
 n_fft : 2048
 hop_length : 512
 sample_rate : 32000
-mix_p : 0.2
+mix_p : 0
 mix_alpha : 0.5
-melspectrogram_parameters : {
-    "n_mels": 224,
-    "fmin": 20,
-    "fmax": 16000
-}
 
 target_columns : [
     "afrsil1","akekee","akepa1","akiapo","akikik","amewig","aniani","apapan",

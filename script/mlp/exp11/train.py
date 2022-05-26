@@ -51,7 +51,7 @@ with open('config.yml', 'r') as yml:
 
 
 if CFG['DEBUG']:
-    CFG['epochs'] = 1
+    CFG['epochs'] = 3
 
 
 def set_seed(seed=42):
@@ -276,7 +276,7 @@ class Simple(nn.Module):
         self.spec_augmenter = SpecAugmentation(time_drop_width=64, time_stripes_num=2,
                                                freq_drop_width=8, freq_stripes_num=2)
 
-        self.bn0 = nn.BatchNorm2d(CFG['n_mels'])
+        self.bn0 = nn.BatchNorm2d(1025)
 
         base_model = timm.create_model(
             base_model_name, pretrained=pretrained, in_chans=in_channels)
@@ -298,7 +298,8 @@ class Simple(nn.Module):
     def forward(self, input):
         # (batch_size, 1, time_steps, freq_bins)
         #x = self.spectrogram_extractor(input)
-        x = self.logmel_extractor(input)    # (batch_size, 1, time_steps, mel_bins)
+        #x = self.logmel_extractor(input)    # (batch_size, 1, time_steps, mel_bins)
+        x = input
 
         x = x.transpose(1, 3)
         x = self.bn0(x)
@@ -312,7 +313,7 @@ class Simple(nn.Module):
         x = self.encoder(x)
 
         # (batch_size, channels)
-        x = torch.squeeze(self.gem(x))
+        x = torch.squeeze(torch.squeeze(self.gem(x), 2), 2)
         x = F.dropout(x, p=0.5, training=self.training)
         logit = self.fc1(x)
 
@@ -363,7 +364,7 @@ class BCEFocalWeightedLoss(nn.Module):
 
 __CRITERIONS__ = {
     "BCEFocalLoss": BCEFocalLoss,
-    "BCEFocal2WeightedLoss":BCEFocalWeightedLoss
+    "BCEFocalWeightedLoss":BCEFocalWeightedLoss
 }
 
 
@@ -429,7 +430,7 @@ def f1_score(y, clipwise_output, threshold = 0.2):
     return metrics.f1_score(y, pred, average="samples")
 
 
-def training(logger):
+def training(logger, fold):
     exp_num= os.path.basename(os.getcwd())
     device = get_device()
     train = pd.read_csv(CFG['train_csv'])
@@ -442,7 +443,7 @@ def training(logger):
         logger.info(f"***** Fold {fold} Training *****")
 
         wandbrun = wandb.init(project = CFG['project_name'], 
-                         name = f'{exp_num}_fold{fold}', reinit=True)
+                         name = exp_num, reinit=True)
 
         if CFG['DEBUG']:
             trn_df = train.loc[trn_idx, :][0:100].reset_index(drop=True)
@@ -568,8 +569,7 @@ def main():
     for fold in CFG['folds']:
         foldpath = logdir / f'fold{fold}'
         foldpath.mkdir(exist_ok=True, parents=True)
-        
-    training(logger)
+        training(logger, fold)
 
 
 if __name__== '__main__':

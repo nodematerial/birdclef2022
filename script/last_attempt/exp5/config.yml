@@ -1,4 +1,4 @@
-DEBUG : False 
+DEBUG : False
 seed : 42
 epochs : 30
 train : True
@@ -12,7 +12,7 @@ thresholds : [0.15, 0.2, 0.25, 0.3]
 main_thresh_id : 1
 wandb : True
 
-project_name : "birdclef2022_simple"
+project_name : "birdclef2022_final_attempt"
 second_label : True
 psuedo_label : False
 
@@ -22,18 +22,13 @@ transforms : {
 }
 period : 20
 n_mels : 128
-fmin : 2000
+fmin : 20
 fmax : 16000
 n_fft : 2048
 hop_length : 512
 sample_rate : 32000
 mix_p : 0.2
 mix_alpha : 0.5
-melspectrogram_parameters : {
-    "n_mels": 224,
-    "fmin": 20,
-    "fmax": 16000
-}
 
 target_columns : [
     "afrsil1","akekee","akepa1","akiapo","akikik","amewig","aniani","apapan",

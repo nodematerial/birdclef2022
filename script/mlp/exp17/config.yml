@@ -17,12 +17,12 @@ second_label : True
 psuedo_label : False
 
 transforms : {
-    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}],
-    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}],
+    "train": [{"name": "PinkNoise"}],
+    "valid": [{"name": "PinkNoise"}],
 }
-period : 20
+period : 15
 n_mels : 128
-fmin : 2000
+fmin : 20
 fmax : 16000
 n_fft : 2048
 hop_length : 512

@@ -312,7 +312,7 @@ class Simple(nn.Module):
         x = self.encoder(x)
 
         # (batch_size, channels)
-        x = torch.squeeze(self.gem(x))
+        x = torch.squeeze(torch.squeeze(self.gem(x), 2), 2)
         x = F.dropout(x, p=0.5, training=self.training)
         logit = self.fc1(x)
 
@@ -363,7 +363,7 @@ class BCEFocalWeightedLoss(nn.Module):
 
 __CRITERIONS__ = {
     "BCEFocalLoss": BCEFocalLoss,
-    "BCEFocal2WeightedLoss":BCEFocalWeightedLoss
+    "BCEFocalWeightedLoss":BCEFocalWeightedLoss
 }
 
 

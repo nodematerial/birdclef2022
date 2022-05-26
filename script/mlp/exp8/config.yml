@@ -1,8 +1,8 @@
-DEBUG : False 
+DEBUG : False
 seed : 42
 epochs : 30
 train : True
-folds : [0]
+folds : [0, 1, 2, 3, 4]
 img_size : 224
 train_datadir : "../../../input/birdclef-2022/train_audio"
 train_csv : "../../../input/birdclef-2022/train_metadata.csv"
@@ -17,10 +17,10 @@ second_label : True
 psuedo_label : False
 
 transforms : {
-    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}],
-    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}],
+    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}, {"name": "RandomVolume"}],
+    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}, {"name": "RandomVolume"}],
 }
-period : 30
+period : 20
 n_mels : 128
 fmin : 20
 fmax : 16000
@@ -83,7 +83,7 @@ split : "StratifiedKFold"
 split_params : {
     "n_splits": 5,
     "shuffle": True,
-    "random_state": 11
+    "random_state": 42
 }
 
 # model

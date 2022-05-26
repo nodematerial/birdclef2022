@@ -1,4 +1,4 @@
-DEBUG : False 
+DEBUG : False
 seed : 42
 epochs : 30
 train : True
@@ -17,11 +17,11 @@ second_label : True
 psuedo_label : False
 
 transforms : {
-    "train": [{"name": "Normalize"}, {"name": "PinkNoise"}],
-    "valid": [{"name": "Normalize"}, {"name": "PinkNoise"}],
+    "train": [{"name": "Normalize"}, {"name": "PinkNoiseSNR"}],
+    "valid": [{"name": "Normalize"}, {"name": "PinkNoiseSNR"}],
 }
 period : 20
-n_mels : 128
+n_mels : 256
 fmin : 2000
 fmax : 16000
 n_fft : 2048
@@ -67,12 +67,12 @@ scored_birds :  {
 # Dataloader_parameters
 loader_params : {
     "train": {
-        "batch_size": 32,
+        "batch_size": 22,
         "num_workers": 24,
         "shuffle": True
     },
     "valid": {
-        "batch_size": 32,
+        "batch_size": 22,
         "num_workers": 24,
         "shuffle": False
     }
@@ -87,7 +87,7 @@ split_params : {
 }
 
 # model
-base_model_name : "resnet101d"
+base_model_name : "resnext50d_32x4d"
 pooling : "max"
 pretrained : True
 load_weight : False 

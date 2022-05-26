@@ -51,7 +51,7 @@ with open('config.yml', 'r') as yml:
 
 
 if CFG['DEBUG']:
-    CFG['epochs'] = 1
+    CFG['epochs'] = 3
 
 
 def set_seed(seed=42):
@@ -363,7 +363,7 @@ class BCEFocalWeightedLoss(nn.Module):
 
 __CRITERIONS__ = {
     "BCEFocalLoss": BCEFocalLoss,
-    "BCEFocal2WeightedLoss":BCEFocalWeightedLoss
+    "BCEFocalWeightedLoss":BCEFocalWeightedLoss
 }
 
 
@@ -429,10 +429,11 @@ def f1_score(y, clipwise_output, threshold = 0.2):
     return metrics.f1_score(y, pred, average="samples")
 
 
-def training(logger):
+def training(logger, fold):
     exp_num= os.path.basename(os.getcwd())
     device = get_device()
     train = pd.read_csv(CFG['train_csv'])
+    train = train[train["primary_label"].isin(CFG['scored_birds'])].reset_index()
     train.secondary_labels = train.secondary_labels.apply(eval)
     splitter = getattr(model_selection, CFG['split'])(**CFG['split_params'])
     for fold, (trn_idx, val_idx) in enumerate(splitter.split(train, y=train["primary_label"])):
@@ -442,7 +443,7 @@ def training(logger):
         logger.info(f"***** Fold {fold} Training *****")
 
         wandbrun = wandb.init(project = CFG['project_name'], 
-                         name = f'{exp_num}_fold{fold}', reinit=True)
+                         name = exp_num, reinit=True)
 
         if CFG['DEBUG']:
             trn_df = train.loc[trn_idx, :][0:100].reset_index(drop=True)
@@ -478,9 +479,8 @@ def training(logger):
         mixupper = Mixup(p=CFG['mix_p'], alpha=CFG['mix_alpha'])
         best_f1 = 0
         
-        if CFG['load_weight']:
-            weight = torch.load(CFG['logdir'] + f'/fold{fold}/best.pth')
-            model.load_state_dict(weight)
+        weight = torch.load(CFG['logdir'] + f'/fold{fold}/best.pth')
+        model.load_state_dict(weight)
 
         for epoch in range(CFG['epochs']):
             # training
@@ -568,8 +568,7 @@ def main():
     for fold in CFG['folds']:
         foldpath = logdir / f'fold{fold}'
         foldpath.mkdir(exist_ok=True, parents=True)
-        
-    training(logger)
+        training(logger, fold)
 
 
 if __name__== '__main__':

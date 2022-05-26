@@ -38,7 +38,6 @@ from timm.models.layers import SelectAdaptivePool2d
 from torch.optim.optimizer import Optimizer
 from torchlibrosa.stft import LogmelFilterBank, Spectrogram
 from torchlibrosa.augmentation import SpecAugmentation
-from torch.cuda.amp import autocast, GradScaler
 
 import wandb
 #!wandb login your_wandb_apikey
@@ -51,7 +50,7 @@ with open('config.yml', 'r') as yml:
 
 
 if CFG['DEBUG']:
-    CFG['epochs'] = 1
+    CFG['epochs'] = 3
 
 
 def set_seed(seed=42):
@@ -231,36 +230,68 @@ def pad_framewise_output(framewise_output: torch.Tensor, frames_num: int):
     return output
 
 
-
+def gem(x: torch.Tensor, p=3, eps=1e-6):
+    return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1. / p)
 
 
 class GeM(nn.Module):
     def __init__(self, p=3, eps=1e-6):
-        super(GeM, self).__init__()
-        self.p = nn.Parameter(torch.ones(1)*p)
+        super().__init__()
+        self.p = nn.Parameter(torch.ones(1) * p)
         self.eps = eps
 
     def forward(self, x):
-        return self.gem(x, p=self.p, eps=self.eps)
-        
-    def gem(self, x, p=3, eps=1e-6):
-        return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1./p)
+        return gem(x, p=self.p, eps=self.eps)
 
-class GeM1d(nn.Module):
-    def __init__(self, p=3, eps=1e-6):
-        super(GeM1d, self).__init__()
-        self.p = nn.Parameter(torch.ones(1)*p)
-        self.eps = eps
+    def __repr__(self):
+        return self.__class__.__name__ + f"(p={self.p.data.tolist()[0]:.4f}, eps={self.eps})"
+
+
+class AttBlockV2(nn.Module):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 activation="linear"):
+        super().__init__()
+
+        self.activation = activation
+        self.att = nn.Conv1d(
+            in_channels=in_features,
+            out_channels=out_features,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            bias=True)
+        self.cla = nn.Conv1d(
+            in_channels=in_features,
+            out_channels=out_features,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            bias=True)
+
+        self.init_weights()
+
+    def init_weights(self):
+        init_layer(self.att)
+        init_layer(self.cla)
 
     def forward(self, x):
-        return self.gem(x, p=self.p, eps=self.eps)
-        
-    def gem(self, x, p=3, eps=1e-6):
-        return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), 1)).pow(1./p)
+        # x: (n_samples, n_in, n_time)
+        norm_att = torch.softmax(torch.tanh(self.att(x)), dim=-1)
+        cla = self.nonlinear_transform(self.cla(x))
+        x = torch.sum(norm_att * cla, dim=2)
+        return x, norm_att, cla
+
+    def nonlinear_transform(self, x):
+        if self.activation == 'linear':
+            return x
+        elif self.activation == 'sigmoid':
+            return torch.sigmoid(x)
 
 
-class Simple(nn.Module):
-    def __init__(self, base_model_name: str, pretrained=False, num_classes=152, in_channels=1):
+class TimmSED(nn.Module):
+    def __init__(self, base_model_name: str, pretrained=False, num_classes=24, in_channels=1):
         super().__init__()
         # Spectrogram extractor
         self.spectrogram_extractor = Spectrogram(n_fft=CFG['n_fft'], hop_length=CFG['hop_length'],
@@ -287,8 +318,10 @@ class Simple(nn.Module):
             in_features = base_model.fc.in_features
         else:
             in_features = base_model.classifier.in_features
-        self.fc1 = nn.Linear(in_features, num_classes, bias=True)
-        self.gem = GeM()
+        self.fc1 = nn.Linear(in_features, in_features, bias=True)
+        self.att_block = AttBlockV2(
+            in_features, num_classes, activation="sigmoid")
+
         self.init_weight()
 
     def init_weight(self):
@@ -297,8 +330,10 @@ class Simple(nn.Module):
 
     def forward(self, input):
         # (batch_size, 1, time_steps, freq_bins)
-        #x = self.spectrogram_extractor(input)
-        x = self.logmel_extractor(input)    # (batch_size, 1, time_steps, mel_bins)
+        x = self.spectrogram_extractor(input)
+        x = self.logmel_extractor(x)    # (batch_size, 1, time_steps, mel_bins)
+
+        frames_num = x.shape[2]
 
         x = x.transpose(1, 3)
         x = self.bn0(x)
@@ -311,59 +346,84 @@ class Simple(nn.Module):
         # (batch_size, channels, freq, frames)
         x = self.encoder(x)
 
-        # (batch_size, channels)
-        x = torch.squeeze(self.gem(x))
-        x = F.dropout(x, p=0.5, training=self.training)
-        logit = self.fc1(x)
+        # (batch_size, channels, frames)
+        x = torch.mean(x, dim=2)
 
-        return logit
+        # channel smoothing
+        x1 = F.max_pool1d(x, kernel_size=3, stride=1, padding=1)
+        x2 = F.avg_pool1d(x, kernel_size=3, stride=1, padding=1)
+        x = x1 + x2
+
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = x.transpose(1, 2)
+        x = F.relu_(self.fc1(x))
+        x = x.transpose(1, 2)
+        x = F.dropout(x, p=0.5, training=self.training)
+        (clipwise_output, norm_att, segmentwise_output) = self.att_block(x)
+        logit = torch.sum(norm_att * self.att_block.cla(x), dim=2)
+        segmentwise_logit = self.att_block.cla(x).transpose(1, 2)
+        segmentwise_output = segmentwise_output.transpose(1, 2)
+
+        interpolate_ratio = frames_num // segmentwise_output.size(1)
+
+        # Get framewise output
+        framewise_output = interpolate(segmentwise_output,
+                                       interpolate_ratio)
+        framewise_output = pad_framewise_output(framewise_output, frames_num)
+
+        framewise_logit = interpolate(segmentwise_logit, interpolate_ratio)
+        framewise_logit = pad_framewise_output(framewise_logit, frames_num)
+
+        output_dict = {
+            "framewise_output": framewise_output,
+            "segmentwise_output": segmentwise_output,
+            "logit": logit, # logit of clipwise_output
+            "framewise_logit": framewise_logit,# logit of framewise_output
+            "clipwise_output": clipwise_output
+        }
+
+        return output_dict
 
 
 class BCEFocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, weights = 'None'):
+    def __init__(self, alpha=0.25, gamma=2.0):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.weights = weights
 
     def forward(self, preds, targets):
-        preds = preds
-        if self.weights == 'None':
-            bce_loss = nn.BCEWithLogitsLoss(reduction='none')(preds, targets)
-        else:
-            bce_loss = nn.BCEWithLogitsLoss (reduction='none', 
-                       pos_weight=self.weights)(preds, targets)
+        bce_loss = nn.BCEWithLogitsLoss(reduction='none')(preds, targets)
         probas = torch.sigmoid(preds)
         loss = targets * self.alpha * (1. - probas)**self.gamma * bce_loss \
                 + (1. - targets) * probas**self.gamma * bce_loss
         loss = loss.mean()
         return loss
 
-class BCEFocalWeightedLoss(nn.Module):
-    def __init__(self, W=[1, 1], device = 'cuda', score_weight = 1):
+
+class BCEFocal2WayLoss(nn.Module):
+    def __init__(self, weights=[1, 1], class_weights=None):
         super().__init__()
 
-        d = {}
-        for i, bird in enumerate(CFG['target_columns']):
-            d[bird] = i
-        self.weights = [1] * CFG['num_classes']
-        for scored_bird in CFG['scored_birds'].keys():
-            self.weights[d[scored_bird]] += score_weight
-        self.weights = [x * CFG['num_classes'] / sum(self.weights) for x in self.weights]
-        self.weights = torch.tensor(self.weights).to(device)
-        self.focal = BCEFocalLoss(weights = self.weights)
+        self.focal = BCEFocalLoss()
+
+        self.weights = weights
 
     def forward(self, input, target):
+        input_ = input["logit"]
         target = target.float()
-        loss = self.focal(input, target)
 
-        return loss
+        framewise_output = input["framewise_logit"]
+        clipwise_output_with_max, _ = framewise_output.max(dim=1)
 
+        loss = self.focal(input_, target)
+        aux_loss = self.focal(clipwise_output_with_max, target)
+
+        return self.weights[0] * loss + self.weights[1] * aux_loss
 
 
 __CRITERIONS__ = {
     "BCEFocalLoss": BCEFocalLoss,
-    "BCEFocal2WeightedLoss":BCEFocalWeightedLoss
+    "BCEFocal2WayLoss": BCEFocal2WayLoss
 }
 
 
@@ -434,129 +494,87 @@ def training(logger):
     device = get_device()
     train = pd.read_csv(CFG['train_csv'])
     train.secondary_labels = train.secondary_labels.apply(eval)
-    splitter = getattr(model_selection, CFG['split'])(**CFG['split_params'])
-    for fold, (trn_idx, val_idx) in enumerate(splitter.split(train, y=train["primary_label"])):
-        if fold not in CFG['folds']:
-            continue
-        
-        logger.info(f"***** Fold {fold} Training *****")
 
-        wandbrun = wandb.init(project = CFG['project_name'], 
-                         name = f'{exp_num}_fold{fold}', reinit=True)
 
-        if CFG['DEBUG']:
-            trn_df = train.loc[trn_idx, :][0:100].reset_index(drop=True)
-            val_df = train.loc[val_idx, :][0:100].reset_index(drop=True)
-        else:
-            trn_df = train.loc[trn_idx, :].reset_index(drop=True)
-            val_df = train.loc[val_idx, :].reset_index(drop=True)
+    wandbrun = wandb.init(project = CFG['project_name'], 
+                        name = exp_num, reinit=True)
 
-        loaders = {
-            phase: torchdata.DataLoader(
-                WaveformDataset(
-                    df_,
-                    CFG['train_datadir'],
-                    img_size=CFG['img_size'],
-                    waveform_transforms=get_transforms(phase),
-                    period=CFG['period'],
-                    validation=(phase == "valid")
-                ),
-                **CFG['loader_params'][phase])  # type: ignore
-            for phase, df_ in zip(["train", "valid"], [trn_df, val_df])
-        }
+    if CFG['DEBUG']:
+        train = train[0:100].reset_index(drop=True)
 
-        model = Simple(
-            base_model_name=CFG['base_model_name'],
-            pretrained=CFG['pretrained'],
-            num_classes=CFG['num_classes'],
-            in_channels=CFG['in_channels']).to(device)
+    loader = torchdata.DataLoader(
+            WaveformDataset(
+                train,
+                CFG['train_datadir'],
+                img_size=CFG['img_size'],
+                waveform_transforms=get_transforms('train'),
+                period=CFG['period'],
+                validation=False
+            ),
+            **CFG['loader_params']['train'])
 
-        criterion = get_criterion()
-        optimizer = get_optimizer(model)
-        scheduler = get_scheduler(optimizer)
-        scaler = GradScaler()
-        mixupper = Mixup(p=CFG['mix_p'], alpha=CFG['mix_alpha'])
-        best_f1 = 0
-        
-        if CFG['load_weight']:
-            weight = torch.load(CFG['logdir'] + f'/fold{fold}/best.pth')
-            model.load_state_dict(weight)
+    model = TimmSED(
+        base_model_name=CFG['base_model_name'],
+        pretrained=CFG['pretrained'],
+        num_classes=CFG['num_classes'],
+        in_channels=CFG['in_channels']).to(device)
 
-        for epoch in range(CFG['epochs']):
-            # training
-            sum_loss =0
-            model.train()
-            for x, y in tqdm(loaders['train']):
-                mixupper.init_lambda()
-                x, y = x.to(device), y.to(device)
-                x = model.spectrogram_extractor(x)
-                x = mixupper.lam * x + (1 - mixupper.lam) * x.flip(0)
-                y = mixupper.lam * y + (1 - mixupper.lam) * y.flip(0)
-                if CFG['optimizer_name'] == 'SAM':
-                    # first forward-backward pass
-                    # use this loss for any training statistics
-                    loss = criterion(model(x), y)
-                    loss.backward()
-                    optimizer.first_step(zero_grad=True)
-                    # second forward-backward pass
-                    criterion(model(x), y).backward()
-                    optimizer.second_step(zero_grad=True)
-                    sum_loss += loss.item()
-                else: 
-                    loss = criterion(model(x), y)
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                    sum_loss += loss.item()
-            scheduler.step()
-            train_loss = sum_loss / len(loaders['train'])
+    criterion = get_criterion()
+    optimizer = get_optimizer(model)
+    scheduler = get_scheduler(optimizer)
+    best_loss = 0
 
-            # validation
-            sum_loss = 0
-            sum_f1s = [0] * len(CFG['thresholds'])
-            thresholds = CFG['thresholds']
-            main_thresh_id = CFG['main_thresh_id']
-            model.eval()
-            for x, y in tqdm(loaders['valid']):
-                with torch.no_grad():
-                    x, y = x.to(device), y.to(device)
-                    x = model.spectrogram_extractor(x)
-                    logit = model(x)
-                    loss = criterion(logit, y)
-                    sum_loss+=loss.item()
-                    for i, threshold in enumerate(thresholds):
-                        sum_f1s[i] += f1_score(y.to('cpu'), logit.sigmoid().to('cpu'),
-                                               threshold = threshold)
+    for epoch in range(CFG['epochs']):
+        # training
+        sum_loss =0
+        sum_f1s = [0] * len(CFG['thresholds'])
+        thresholds = CFG['thresholds']
+        model.train()
+        for x, y in tqdm(loader):
+            x, y = x.to(device), y.to(device)
+            if CFG['optimizer_name'] == 'SAM':
+                # first forward-backward pass
+                # use this loss for any training statistics
+                logits = model(x)
+                loss = criterion(logits, y)
+                loss.backward()
+                optimizer.first_step(zero_grad=True)
+                # second forward-backward pass
+                criterion(model(x), y).backward()
+                optimizer.second_step(zero_grad=True)
+                sum_loss += loss.item()
+                for i, threshold in enumerate(thresholds):
+                    sum_f1s[i] += f1_score(y.to('cpu'), logits['clipwise_output'].to('cpu'),
+                                           threshold = threshold)
+        scheduler.step()
+        train_loss = sum_loss / len(loader)
+        f1s = [ k / len(loader) for k in sum_f1s ]
 
-            valid_loss = sum_loss / len(loaders['valid'])
-            f1s = [ k / len(loaders['valid']) for k in sum_f1s]
+        if train_loss > best_loss:
+            torch.save(model.state_dict(), f'out/best.pth')
+        logdict = {'train/loss' : train_loss, 'lr':scheduler.get_last_lr()[0]}
+        f1_dict = {}
+        for i, threshold in enumerate(thresholds):
+            logdict[f'f1_at_{threshold}'] = f1s[i]
+            f1_dict[f'f1_at_{threshold}'] = round(f1s[i], 4)
 
-            if f1s[main_thresh_id] > best_f1:
-                best_f1 = f1s[main_thresh_id]
-                best_epoch = epoch
-                torch.save(model.state_dict(), f'out/fold{fold}/best.pth')
-            logdict = {'train/loss' : train_loss, 'valid/loss' : valid_loss, 'lr':scheduler.get_last_lr()[0]}
-            f1_dict = {}
-            for i, threshold in enumerate(thresholds):
-                logdict[f'f1_at_{threshold}'] = f1s[i]
-                f1_dict[f'f1_at_{threshold}'] = round(f1s[i], 4)
+        logger.info(f'train_loss:{train_loss:.4g} | valid_loss:{loss:.4g} | f1_score : {f1_dict}')
+        wandb.log(logdict)
 
-            logger.info(f'train_loss:{train_loss:.4g} | valid_loss:{loss:.4g} | f1_score : {f1_dict}')
-            wandb.log(logdict)
+    del model, optimizer, scheduler
+    gc.collect()
+    torch.cuda.empty_cache()
 
-        logger.info(f'fold{fold}\'s best_score is {best_f1:.4g} at epoch {best_epoch}')
-
-        del model, optimizer, scheduler
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        wandbrun.finish()
+    wandbrun.finish()
 
 
 def main():
     warnings.filterwarnings("ignore")
     logdir = Path(CFG['logdir'])
     logdir.mkdir(exist_ok=True, parents=True)
+    for fold in CFG['folds']:
+            foldpath = logdir / f'fold{fold}'
+            foldpath.mkdir(exist_ok=True, parents=True)
     if (logdir / "train.log").exists():
         os.remove(logdir / "train.log")
     set_seed(CFG['seed'])
@@ -565,10 +583,7 @@ def main():
     # display
     display(logger)
 
-    for fold in CFG['folds']:
-        foldpath = logdir / f'fold{fold}'
-        foldpath.mkdir(exist_ok=True, parents=True)
-        
+    # main_loop
     training(logger)
 
 

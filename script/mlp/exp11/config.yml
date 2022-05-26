@@ -1,4 +1,4 @@
-DEBUG : False 
+DEBUG : False
 seed : 42
 epochs : 30
 train : True
@@ -22,12 +22,12 @@ transforms : {
 }
 period : 20
 n_mels : 128
-fmin : 2000
+fmin : 20
 fmax : 16000
 n_fft : 2048
 hop_length : 512
 sample_rate : 32000
-mix_p : 0.2
+mix_p : 0.3
 mix_alpha : 0.5
 melspectrogram_parameters : {
     "n_mels": 224,
@@ -60,19 +60,19 @@ target_columns : [
 scored_birds :  {
     "akiapo" : 0, "aniani" : 1, "apapan" : 2, "barpet" : 3, "crehon" : 4,
     "elepai" : 5, "ercfra" : 6, "hawama" : 7, "hawcre": 8, "hawgoo" : 9, "hawhaw" : 10, 
-    "hawpet1" : 11, "houfin" : 12, "iiwi" :13, "jabwar" : 14,"maupar" : 15, "omao" : 16,
+    "hawpet1" : 11, "houfin" : 12, "iiwi" : 13, "jabwar" : 14,"maupar" : 15, "omao" : 16,
     "puaioh" : 17, "skylar" : 18, "warwhe1" : 19, "yefcan" : 20
     }
 
 # Dataloader_parameters
 loader_params : {
     "train": {
-        "batch_size": 32,
+        "batch_size": 7,
         "num_workers": 24,
         "shuffle": True
     },
     "valid": {
-        "batch_size": 32,
+        "batch_size": 7,
         "num_workers": 24,
         "shuffle": False
     }
@@ -87,7 +87,7 @@ split_params : {
 }
 
 # model
-base_model_name : "resnet101d"
+base_model_name : "resnet50d"
 pooling : "max"
 pretrained : True
 load_weight : False 
@@ -95,14 +95,14 @@ num_classes : 152
 in_channels : 1
 
 # loss
-loss_name : "BCEFocalLoss"
-loss_params: {}
+loss_name : "BCEFocalWeightedLoss"
+loss_params: {score_weight : 3}
 
 # optimizer
 optimizer_name : "SAM"
 base_optimizer : "Adam"
 optimizer_params : {
-    "lr": 0.001, 
+    "lr": 0.0006, 
 }
 
 # scheduler

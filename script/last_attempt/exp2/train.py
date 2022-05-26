@@ -51,7 +51,7 @@ with open('config.yml', 'r') as yml:
 
 
 if CFG['DEBUG']:
-    CFG['epochs'] = 1
+    CFG['epochs'] = 3
 
 
 def set_seed(seed=42):
@@ -129,6 +129,7 @@ class WaveformDataset(torchdata.Dataset):
             y = y[start:start + effective_length].astype(np.float32)
         else:
             y = y.astype(np.float32)
+        print(start)
 
         y = np.nan_to_num(y)
 
@@ -312,7 +313,7 @@ class Simple(nn.Module):
         x = self.encoder(x)
 
         # (batch_size, channels)
-        x = torch.squeeze(self.gem(x))
+        x = torch.squeeze(torch.squeeze(self.gem(x), 2), 2)
         x = F.dropout(x, p=0.5, training=self.training)
         logit = self.fc1(x)
 
@@ -363,7 +364,7 @@ class BCEFocalWeightedLoss(nn.Module):
 
 __CRITERIONS__ = {
     "BCEFocalLoss": BCEFocalLoss,
-    "BCEFocal2WeightedLoss":BCEFocalWeightedLoss
+    "BCEFocalWeightedLoss":BCEFocalWeightedLoss
 }
 
 
@@ -429,7 +430,7 @@ def f1_score(y, clipwise_output, threshold = 0.2):
     return metrics.f1_score(y, pred, average="samples")
 
 
-def training(logger):
+def training(logger, fold):
     exp_num= os.path.basename(os.getcwd())
     device = get_device()
     train = pd.read_csv(CFG['train_csv'])
@@ -442,7 +443,7 @@ def training(logger):
         logger.info(f"***** Fold {fold} Training *****")
 
         wandbrun = wandb.init(project = CFG['project_name'], 
-                         name = f'{exp_num}_fold{fold}', reinit=True)
+                         name = exp_num, reinit=True)
 
         if CFG['DEBUG']:
             trn_df = train.loc[trn_idx, :][0:100].reset_index(drop=True)
@@ -568,8 +569,7 @@ def main():
     for fold in CFG['folds']:
         foldpath = logdir / f'fold{fold}'
         foldpath.mkdir(exist_ok=True, parents=True)
-        
-    training(logger)
+        training(logger, fold)
 
 
 if __name__== '__main__':
